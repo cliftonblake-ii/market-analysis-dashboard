@@ -118,14 +118,14 @@ const validTrade = {
 
   test("Records a simulated trade and subtracts fees", () =>
     tradeResult.recorded &&
-    Math.abs(aggressive.balance - 108) < 0.000001
+    Math.abs(aggressive.balance - 103) < 0.000001
   );
 
   test("Reports one winning trade", () => {
     const summary = getPerformanceSummary(aggressive);
     return summary.totalTrades === 1 &&
       summary.wins === 1 &&
-      summary.realizedPnL === 8;
+      summary.realizedPnL === 3;
   });
 
   test("Rejects negative fees", () => {
