@@ -74,15 +74,18 @@
     patient !== aggressive
   );
 
-  const validTrade = {
-    market: "MNQ",
-    strategy: STRATEGIES.AGGRESSIVE,
-    direction: "LONG",
-    entry: 100,
-    stop: 95,
-    target: 110,
-    quantity: 2
-  };
+  
+const validTrade = {
+  market: "MNQ",
+  strategy: STRATEGIES.AGGRESSIVE,
+  direction: "LONG",
+  entry: 100,
+  stop: 99.5,
+  target: 101,
+  quantity: 1,
+  pointValue: 1
+};
+
 
   test("Accepts a correctly structured long trade", () =>
     validateTrade(validTrade).valid
