@@ -1,0 +1,143 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Atlas Simulation Engine Tests</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #101722;
+      color: #edf2f7;
+      padding: 24px;
+      line-height: 1.6;
+    }
+    section {
+      max-width: 700px;
+      margin: auto;
+      background: #1a2635;
+      border: 1px solid #344154;
+      border-radius: 12px;
+      padding: 24px;
+    }
+    li { margin-bottom: 10px; }
+    .pass { color: #70dda0; }
+    .fail { color: #ff8585; }
+  </style>
+</head>
+<body>
+<section>
+  <h1>Atlas Simulation Engine</h1>
+  <p>Automated foundation checks — no live orders.</p>
+  <p id="status">Running tests...</p>
+  <ul id="results"></ul>
+</section>
+
+<script type="module">
+  import {
+    STRATEGIES,
+    createVirtualAccount,
+    validateTrade,
+    recordSimulatedTrade,
+    getPerformanceSummary
+  } from "./src/simulation.js";
+
+  const results = document.getElementById("results");
+  const status = document.getElementById("status");
+  let passed = 0;
+  let failed = 0;
+
+  function test(name, check) {
+    const item = document.createElement("li");
+
+    try {
+      if (!check()) throw new Error("Check returned false.");
+      item.textContent = "PASS — " + name;
+      item.className = "pass";
+      passed++;
+    } catch (error) {
+      item.textContent = "FAIL — " + name + ": " + error.message;
+      item.className = "fail";
+      failed++;
+    }
+
+    results.appendChild(item);
+  }
+
+  const patient = createVirtualAccount(STRATEGIES.PATIENT);
+  const aggressive = createVirtualAccount(STRATEGIES.AGGRESSIVE);
+
+  test("Creates separate $100 virtual accounts", () =>
+    patient.balance === 100 &&
+    aggressive.balance === 100 &&
+    patient !== aggressive
+  );
+
+  const validTrade = {
+    market: "MNQ",
+    strategy: STRATEGIES.AGGRESSIVE,
+    direction: "LONG",
+    entry: 100,
+    stop: 95,
+    target: 110,
+    quantity: 2
+  };
+
+  test("Accepts a correctly structured long trade", () =>
+    validateTrade(validTrade).valid
+  );
+
+  test("Rejects a long trade with a stop above entry", () =>
+    !validateTrade({ ...validTrade, stop: 105 }).valid
+  );
+
+  test("Rejects Patient strategy without validated probability", () =>
+    !validateTrade({
+      ...validTrade,
+      strategy: STRATEGIES.PATIENT
+    }).valid
+  );
+
+  test("Rejects Patient strategy below the 85% threshold", () =>
+    !validateTrade({
+      ...validTrade,
+      strategy: STRATEGIES.PATIENT,
+      validatedProbability: 0.84
+    }).valid
+  );
+
+  const tradeResult = recordSimulatedTrade(
+    aggressive,
+    validTrade,
+    { exitPrice: 105, fees: 2 }
+  );
+
+  test("Records a simulated trade and subtracts fees", () =>
+    tradeResult.recorded &&
+    Math.abs(aggressive.balance - 108) < 0.000001
+  );
+
+  test("Reports one winning trade", () => {
+    const summary = getPerformanceSummary(aggressive);
+    return summary.totalTrades === 1 &&
+      summary.wins === 1 &&
+      summary.realizedPnL === 8;
+  });
+
+  test("Rejects negative fees", () => {
+    const result = recordSimulatedTrade(
+      aggressive,
+      validTrade,
+      { exitPrice: 105, fees: -1 }
+    );
+    return !result.recorded;
+  });
+
+  status.textContent =
+    `${passed} passed; ${failed} failed.`;
+
+  status.className = failed === 0 ? "pass" : "fail";
+</script>
+</body>
+</html>
