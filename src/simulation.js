@@ -110,16 +110,19 @@ export function recordSimulatedTrade(account, trade, result) {
     };
   }
 
+  
   const riskCheck = assessTradeRisk({
     accountBalance: account.balance,
     entry: trade.entry,
     stop: trade.stop,
     quantity: trade.quantity,
     pointValue: trade.pointValue ?? 1,
-    dailyStartingBalance: account.startingBalance,
-    dailyRealizedPnL: account.realizedPnL,
+    dailyStartingBalance:
+      account.dailyStartingBalance ?? account.startingBalance,
+    dailyRealizedPnL: account.dailyRealizedPnL ?? 0,
     openRisk: account.openRisk ?? 0,
   });
+
 
   if (!riskCheck.approved) {
     return {
@@ -166,6 +169,9 @@ export function recordSimulatedTrade(account, trade, result) {
   account.balance += netPnL;
   account.realizedPnL += netPnL;
   account.trades.push(record);
+
+account.dailyRealizedPnL =
+  (account.dailyRealizedPnL ?? 0) + netPnL;
 
   return {
     recorded: true,
