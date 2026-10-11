@@ -1,0 +1,129 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Atlas Risk Engine Tests</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #101722;
+      color: #edf2f7;
+      padding: 24px;
+      line-height: 1.6;
+    }
+    section {
+      max-width: 700px;
+      margin: auto;
+      background: #1a2635;
+      border: 1px solid #344154;
+      border-radius: 12px;
+      padding: 24px;
+    }
+    li { margin-bottom: 10px; }
+    .pass { color: #70dda0; }
+    .fail { color: #ff8585; }
+  </style>
+</head>
+<body>
+<section>
+  <h1>Atlas Risk Engine</h1>
+  <p>Safety checks only — no live orders.</p>
+  <p id="status">Running tests...</p>
+  <ul id="results"></ul>
+</section>
+
+<script type="module">
+  const status = document.getElementById("status");
+  const results = document.getElementById("results");
+
+  function test(name, check) {
+    const item = document.createElement("li");
+    try {
+      if (!check()) throw new Error("Check returned false.");
+      item.textContent = "PASS — " + name;
+      item.className = "pass";
+    } catch (error) {
+      item.textContent = "FAIL — " + name + ": " + error.message;
+      item.className = "fail";
+    }
+    results.appendChild(item);
+  }
+
+  async function runTests() {
+    try {
+      const { assessTradeRisk } =
+        await import("./src/risk-engine.js");
+
+      const baseTrade = {
+        accountBalance: 1000,
+        entry: 100,
+        stop: 95,
+        quantity: 1,
+        pointValue: 1,
+      };
+
+      test("Approves a trade within all limits", () =>
+        assessTradeRisk(baseTrade).approved
+      );
+
+      test("Rejects a trade risking too much per trade", () =>
+        !assessTradeRisk({
+          ...baseTrade,
+          quantity: 3,
+        }).approved
+      );
+
+      test("Rejects a trade when the daily loss limit is reached", () =>
+        !assessTradeRisk({
+          ...baseTrade,
+          dailyRealizedPnL: -30,
+        }).approved
+      );
+
+      test("Rejects a trade that exceeds combined open risk", () =>
+        !assessTradeRisk({
+          ...baseTrade,
+          openRisk: 20,
+        }).approved
+      );
+
+      test("Rejects a zero entry price", () =>
+        !assessTradeRisk({
+          ...baseTrade,
+          entry: 0,
+        }).approved
+      );
+
+      test("Rejects a negative quantity", () =>
+        !assessTradeRisk({
+          ...baseTrade,
+          quantity: -1,
+        }).approved
+      );
+
+      test("Calculates proposed risk correctly", () => {
+        const result = assessTradeRisk(baseTrade);
+        return result.approved &&
+          result.proposedRisk === 5;
+      });
+
+      const items = [...results.children];
+      const failed = items.filter(
+        item => item.className === "fail"
+      ).length;
+      const passed = items.length - failed;
+
+      status.textContent = `${passed} passed; ${failed} failed.`;
+      status.className = failed === 0 ? "pass" : "fail";
+    } catch (error) {
+      status.textContent = "TEST SETUP ERROR: " + error.message;
+      status.className = "fail";
+    }
+  }
+
+  runTests();
+</script>
+</body>
+</html>
