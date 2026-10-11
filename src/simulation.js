@@ -20,13 +20,7 @@ export function createVirtualAccount(strategy) {
     throw new Error("Unknown strategy.");
   }
 
-  return {
-    strategy,
-    startingBalance: INITIAL_VIRTUAL_BALANCE,
-    balance: INITIAL_VIRTUAL_BALANCE,
-    realizedPnL: 0,
-    trades: [],
-  };
+  
 }
 
 export function validateTrade(trade) {
@@ -190,16 +184,16 @@ export function getPerformanceSummary(account) {
     (trade) => trade.netPnL < 0
   ).length;
 
+  
   return {
-    strategy: account.strategy,
-    startingBalance: account.startingBalance,
-    currentBalance: account.balance,
-    realizedPnL: account.realizedPnL,
-    totalTrades: trades.length,
-    wins,
-    losses,
-    winRate: trades.length
-      ? wins / trades.length
-      : null,
+    strategy,
+    startingBalance: INITIAL_VIRTUAL_BALANCE,
+    balance: INITIAL_VIRTUAL_BALANCE,
+    realizedPnL: 0,
+    dailyStartingBalance: INITIAL_VIRTUAL_BALANCE,
+    dailyRealizedPnL: 0,
+    openRisk: 0,
+    trades: [],
   };
+
 }
