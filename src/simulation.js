@@ -1,4 +1,6 @@
 
+import { assessTradeRisk } from "./risk-engine.js";
+
 /**
  * Atlas Trading Command Center
  * Phase 1: Simulation foundation
@@ -111,6 +113,25 @@ export function recordSimulatedTrade(account, trade, result) {
     return {
       recorded: false,
       errors: validation.errors,
+    };
+  }
+
+  const riskCheck = assessTradeRisk({
+    accountBalance: account.balance,
+    entry: trade.entry,
+    stop: trade.stop,
+    quantity: trade.quantity,
+    pointValue: trade.pointValue ?? 1,
+    dailyStartingBalance: account.startingBalance,
+    dailyRealizedPnL: account.realizedPnL,
+    openRisk: account.openRisk ?? 0,
+  });
+
+  if (!riskCheck.approved) {
+    return {
+      recorded: false,
+      errors: riskCheck.errors,
+      riskCheck,
     };
   }
 
