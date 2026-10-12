@@ -26,15 +26,15 @@ export function assessTradeRisk({
 } = {}) {
   const errors = [];
 
-  // Check required account and trade inputs.
-  for (const [name, value] of Object.entries({
-    accountBalance,
-    dailyStartingBalance,
-    entry,
-    stop,
-    quantity,
-    pointValue,
-  })) {
+
+const baseTrade = {
+  accountBalance: 1000,
+  entry: 100,
+  stop: 95,
+  quantity: 1,
+  pointValue: 1,
+};
+
     if (
       typeof value !== "number" ||
       !Number.isFinite(value) ||
