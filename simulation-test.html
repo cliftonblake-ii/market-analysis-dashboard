@@ -69,10 +69,13 @@
   const aggressive = createVirtualAccount(STRATEGIES.AGGRESSIVE);
 
   test("Creates separate $100 virtual accounts", () =>
-    patient.balance === 100 &&
-    aggressive.balance === 100 &&
-    patient !== aggressive
-  );
+  patient.balance === 100 &&
+  aggressive.balance === 100 &&
+  patient !== aggressive &&
+  patient.dailyStartingBalance === 100 &&
+  patient.dailyRealizedPnL === 0 &&
+  patient.openRisk === 0
+);
 
   
 const validTrade = {
