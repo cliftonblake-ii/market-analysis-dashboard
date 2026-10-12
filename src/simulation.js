@@ -136,6 +136,77 @@ export function validateTrade(trade) {
   };
 }
 
+export function openSimulatedPosition(account, trade) {
+  if (
+    !account ||
+    !Array.isArray(account.openPositions) ||
+    !Number.isFinite(account.balance)
+  ) {
+    return {
+      opened: false,
+      errors: ["A valid virtual account is required."],
+    };
+  }
+
+  const validation = validateTrade(trade);
+
+  if (!validation.valid) {
+    return {
+      opened: false,
+      errors: validation.errors,
+    };
+  }
+
+  if (trade.strategy !== account.strategy) {
+    return {
+      opened: false,
+      errors: ["Trade strategy does not match the virtual account."],
+    };
+  }
+
+  const openRisk = account.openPositions.reduce(
+    (total, position) => total + position.riskAmount,
+    0
+  );
+
+  const riskCheck = assessTradeRisk({
+    accountBalance: account.balance,
+    dailyStartingBalance:
+      account.dailyStartingBalance ?? account.startingBalance,
+    dailyRealizedPnL: account.dailyRealizedPnL ?? 0,
+    openRisk,
+    entry: trade.entry,
+    stop: trade.stop,
+    quantity: trade.quantity,
+    pointValue: trade.pointValue ?? 1,
+    rules: account.riskRules ?? DEFAULT_RISK_RULES,
+  });
+
+  if (!riskCheck.approved) {
+    return {
+      opened: false,
+      errors: riskCheck.errors,
+      riskCheck,
+    };
+  }
+
+  const position = {
+    ...trade,
+    id: `position-${Date.now()}-${account.openPositions.length}`,
+    riskAmount: riskCheck.proposedRisk,
+    openedAt: new Date().toISOString(),
+  };
+
+  account.openPositions.push(position);
+  account.openRisk = openRisk + position.riskAmount;
+
+  return {
+    opened: true,
+    position,
+    riskCheck,
+  };
+}
+
 export function recordSimulatedTrade(account, trade, result) {
   if (
     !account ||
