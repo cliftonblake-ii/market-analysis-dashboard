@@ -34,9 +34,12 @@ export function createVirtualAccount(strategy) {
     dailyStartingBalance: INITIAL_VIRTUAL_BALANCE,
     dailyRealizedPnL: 0,
 
-    // Placeholder for future open-position tracking.
-    // Closed-trade records do not update this field.
-    openRisk: 0,
+    // Tracks trades that are currently open.
+openPositions: [],
+
+// Temporary compatibility field.
+// We will replace this with calculated open risk.
+openRisk: 0,
 
     riskRules: { ...DEFAULT_RISK_RULES },
     trades: [],
