@@ -1,37 +1,64 @@
 
-import { assessTradeRisk } from "./risk-engine.js";
-
 /**
  * Atlas Trading Command Center
- * Phase 1: Simulation foundation
+ * Simulation Engine — Phase 1
  *
- * Simulation only. No broker connection or live orders.
+ * Uses virtual accounts only.
+ * No broker connection or live order execution.
  */
+
+import {
+  DEFAULT_RISK_RULES,
+  assessTradeRisk,
+} from "./risk-engine.js";
 
 export const INITIAL_VIRTUAL_BALANCE = 100;
 
-export const STRATEGIES = {
+export const STRATEGIES = Object.freeze({
   PATIENT: "patient_high_confidence",
   AGGRESSIVE: "aggressive_short_term",
-};
+});
 
 export function createVirtualAccount(strategy) {
   if (!Object.values(STRATEGIES).includes(strategy)) {
     throw new Error("Unknown strategy.");
   }
 
-  
+  return {
+    strategy,
+    startingBalance: INITIAL_VIRTUAL_BALANCE,
+    balance: INITIAL_VIRTUAL_BALANCE,
+    realizedPnL: 0,
+
+    // Daily tracking. Reset logic will be added separately.
+    dailyStartingBalance: INITIAL_VIRTUAL_BALANCE,
+    dailyRealizedPnL: 0,
+
+    // Placeholder for future open-position tracking.
+    // Closed-trade records do not update this field.
+    openRisk: 0,
+
+    riskRules: { ...DEFAULT_RISK_RULES },
+    trades: [],
+  };
 }
 
 export function validateTrade(trade) {
   const errors = [];
 
   if (!trade || typeof trade !== "object") {
-    return { valid: false, errors: ["Trade is required."] };
+    return {
+      valid: false,
+      errors: ["Trade is required."],
+    };
   }
 
-  if (!trade.market || typeof trade.market !== "string") {
+  if (typeof trade.market !== "string" || !trade.market.trim()) {
     errors.push("Market is required.");
+  }
+
+  if (!Object.values(STRATEGIES).includes(trade.strategy)) {
+    errors.push("A valid strategy is required.");
   }
 
   if (!["LONG", "SHORT"].includes(trade.direction)) {
@@ -48,11 +75,25 @@ export function validateTrade(trade) {
     }
   }
 
+  if (trade.pointValue !== undefined) {
+    if (
+      typeof trade.pointValue !== "number" ||
+      !Number.isFinite(trade.pointValue) ||
+      trade.pointValue <= 0
+    ) {
+      errors.push("pointValue must be a positive number.");
+    }
+  }
+
   if (
     Number.isFinite(trade.entry) &&
     Number.isFinite(trade.stop) &&
     Number.isFinite(trade.target)
   ) {
+    if (trade.entry === trade.stop) {
+      errors.push("Entry and stop cannot be the same price.");
+    }
+
     if (trade.direction === "LONG") {
       if (trade.stop >= trade.entry) {
         errors.push("A LONG stop must be below entry.");
@@ -74,20 +115,16 @@ export function validateTrade(trade) {
     }
   }
 
-  if (
-    trade.strategy === STRATEGIES.PATIENT &&
-    (
+  if (trade.strategy === STRATEGIES.PATIENT) {
+    if (
       !Number.isFinite(trade.validatedProbability) ||
-      trade.validatedProbability < 0.85
-    )
-  ) {
-    errors.push(
-      "Patient strategy requires historically validated probability of at least 85%."
-    );
-  }
-
-  if (!Object.values(STRATEGIES).includes(trade.strategy)) {
-    errors.push("A valid strategy is required.");
+      trade.validatedProbability < 0.85 ||
+      trade.validatedProbability > 1
+    ) {
+      errors.push(
+        "Patient strategy requires a claimed validated probability from 85% to 100%."
+      );
+    }
   }
 
   return {
@@ -97,7 +134,12 @@ export function validateTrade(trade) {
 }
 
 export function recordSimulatedTrade(account, trade, result) {
-  if (!account || !Array.isArray(account.trades)) {
+  if (
+    !account ||
+    !Array.isArray(account.trades) ||
+    !Number.isFinite(account.balance) ||
+    !Number.isFinite(account.realizedPnL)
+  ) {
     throw new Error("A valid virtual account is required.");
   }
 
@@ -110,25 +152,10 @@ export function recordSimulatedTrade(account, trade, result) {
     };
   }
 
-  
-  const riskCheck = assessTradeRisk({
-    accountBalance: account.balance,
-    entry: trade.entry,
-    stop: trade.stop,
-    quantity: trade.quantity,
-    pointValue: trade.pointValue ?? 1,
-    dailyStartingBalance:
-      account.dailyStartingBalance ?? account.startingBalance,
-    dailyRealizedPnL: account.dailyRealizedPnL ?? 0,
-    openRisk: account.openRisk ?? 0,
-  });
-
-
-  if (!riskCheck.approved) {
+  if (trade.strategy !== account.strategy) {
     return {
       recorded: false,
-      errors: riskCheck.errors,
-      riskCheck,
+      errors: ["Trade strategy does not match the virtual account."],
     };
   }
 
@@ -147,13 +174,34 @@ export function recordSimulatedTrade(account, trade, result) {
     };
   }
 
-  const directionMultiplier =
-    trade.direction === "LONG" ? 1 : -1;
+  // Risk check happens before the trade can be recorded.
+  const riskCheck = assessTradeRisk({
+    accountBalance: account.balance,
+    dailyStartingBalance:
+      account.dailyStartingBalance ?? account.startingBalance,
+    dailyRealizedPnL: account.dailyRealizedPnL ?? 0,
+    openRisk: account.openRisk ?? 0,
+    entry: trade.entry,
+    stop: trade.stop,
+    quantity: trade.quantity,
+    pointValue: trade.pointValue ?? 1,
+    rules: account.riskRules ?? DEFAULT_RISK_RULES,
+  });
+
+  if (!riskCheck.approved) {
+    return {
+      recorded: false,
+      errors: riskCheck.errors,
+      riskCheck,
+    };
+  }
+
+  const directionMultiplier = trade.direction === "LONG" ? 1 : -1;
 
   const grossPnL =
     (result.exitPrice - trade.entry) *
     directionMultiplier *
-    trade.quantity;
+    (trade.quantity * (trade.pointValue ?? 1));
 
   const netPnL = grossPnL - result.fees;
 
@@ -163,15 +211,17 @@ export function recordSimulatedTrade(account, trade, result) {
     fees: result.fees,
     grossPnL,
     netPnL,
+    riskCheck,
     recordedAt: new Date().toISOString(),
   };
 
+  // Update totals only after all validation and risk checks pass.
   account.balance += netPnL;
   account.realizedPnL += netPnL;
-  account.trades.push(record);
+  account.dailyRealizedPnL =
+    (account.dailyRealizedPnL ?? 0) + netPnL;
 
-account.dailyRealizedPnL =
-  (account.dailyRealizedPnL ?? 0) + netPnL;
+  account.trades.push(record);
 
   return {
     recorded: true,
@@ -180,26 +230,25 @@ account.dailyRealizedPnL =
 }
 
 export function getPerformanceSummary(account) {
+  if (!account || !Array.isArray(account.trades)) {
+    throw new Error("A valid virtual account is required.");
+  }
+
   const trades = account.trades;
+  const wins = trades.filter((trade) => trade.netPnL > 0).length;
+  const losses = trades.filter((trade) => trade.netPnL < 0).length;
+  const breakeven = trades.filter((trade) => trade.netPnL === 0).length;
 
-  const wins = trades.filter(
-    (trade) => trade.netPnL > 0
-  ).length;
-
-  const losses = trades.filter(
-    (trade) => trade.netPnL < 0
-  ).length;
-
-  
   return {
-    strategy,
-    startingBalance: INITIAL_VIRTUAL_BALANCE,
-    balance: INITIAL_VIRTUAL_BALANCE,
-    realizedPnL: 0,
-    dailyStartingBalance: INITIAL_VIRTUAL_BALANCE,
-    dailyRealizedPnL: 0,
-    openRisk: 0,
-    trades: [],
+    strategy: account.strategy,
+    startingBalance: account.startingBalance,
+    currentBalance: account.balance,
+    realizedPnL: account.realizedPnL,
+    dailyRealizedPnL: account.dailyRealizedPnL ?? 0,
+    totalTrades: trades.length,
+    wins,
+    losses,
+    breakeven,
+    winRate: trades.length ? wins / trades.length : null,
   };
-
 }
