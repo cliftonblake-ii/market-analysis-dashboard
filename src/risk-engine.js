@@ -1,20 +1,21 @@
 
 /**
  * Atlas Trading Command Center
- * Phase 1: Risk Engine
+ * Risk Engine — Phase 1
  *
- * Simulation only. No live orders.
+ * Evaluates proposed trades before simulation.
+ * No broker connection or live order execution.
  */
 
-export const DEFAULT_RISK_RULES = {
+export const DEFAULT_RISK_RULES = Object.freeze({
   maxRiskPerTradePercent: 1,
   maxDailyLossPercent: 3,
   maxOpenRiskPercent: 2,
-};
+});
 
 export function assessTradeRisk({
   accountBalance,
-  dailyStartingBalance = accountBalance,
+  dailyStartingBalance,
   dailyRealizedPnL = 0,
   openRisk = 0,
   entry,
@@ -22,29 +23,17 @@ export function assessTradeRisk({
   quantity,
   pointValue = 1,
   rules = DEFAULT_RISK_RULES,
-}) {
+} = {}) {
   const errors = [];
 
-  const positiveValues = {
+  // Check required account and trade inputs.
+  for (const [name, value] of Object.entries({
     accountBalance,
     dailyStartingBalance,
-    pointValue,
-  };
-
-  for (const [name, value] of Object.entries(positiveValues)) {
-    if (
-      typeof value !== "number" ||
-      !Number.isFinite(value) ||
-      value <= 0
-    ) {
-      errors.push(`${name} must be a positive number.`);
-    }
-  }
-
-  for (const [name, value] of Object.entries({
     entry,
     stop,
     quantity,
+    pointValue,
   })) {
     if (
       typeof value !== "number" ||
@@ -55,27 +44,41 @@ export function assessTradeRisk({
     }
   }
 
-  for (const [name, value] of Object.entries({
-    dailyRealizedPnL,
-    openRisk,
-  })) {
-    if (
-      typeof value !== "number" ||
-      !Number.isFinite(value) ||
-      value < 0 && name === "openRisk"
-    ) {
-      errors.push(`${name} must be a valid number.`);
-    }
+  if (
+    typeof dailyRealizedPnL !== "number" ||
+    !Number.isFinite(dailyRealizedPnL)
+  ) {
+    errors.push("dailyRealizedPnL must be a valid number.");
   }
 
-  for (const [name, value] of Object.entries(rules)) {
-    if (
-      typeof value !== "number" ||
-      !Number.isFinite(value) ||
-      value <= 0 ||
-      value > 100
-    ) {
-      errors.push(`${name} must be greater than 0 and at most 100.`);
+  if (
+    typeof openRisk !== "number" ||
+    !Number.isFinite(openRisk) ||
+    openRisk < 0
+  ) {
+    errors.push("openRisk must be a nonnegative number.");
+  }
+
+  if (!rules || typeof rules !== "object") {
+    errors.push("Valid risk rules are required.");
+  } else {
+    for (const name of [
+      "maxRiskPerTradePercent",
+      "maxDailyLossPercent",
+      "maxOpenRiskPercent",
+    ]) {
+      const value = rules[name];
+
+      if (
+        typeof value !== "number" ||
+        !Number.isFinite(value) ||
+        value <= 0 ||
+        value > 100
+      ) {
+        errors.push(
+          `${name} must be greater than 0 and at most 100.`
+        );
+      }
     }
   }
 
@@ -93,6 +96,7 @@ export function assessTradeRisk({
   const maxTradeRisk =
     accountBalance * rules.maxRiskPerTradePercent / 100;
 
+  // Negative daily P&L means a realized daily loss.
   const dailyLoss = Math.max(0, -dailyRealizedPnL);
 
   const maxDailyLoss =
@@ -100,6 +104,10 @@ export function assessTradeRisk({
 
   const maxOpenRisk =
     accountBalance * rules.maxOpenRiskPercent / 100;
+
+  if (entry === stop) {
+    errors.push("Entry and stop cannot be the same price.");
+  }
 
   if (proposedRisk > maxTradeRisk) {
     errors.push("Trade exceeds the maximum risk per trade.");
@@ -119,13 +127,14 @@ export function assessTradeRisk({
     approved: errors.length === 0,
     errors,
     message: errors.length === 0
-      ? "RISK CHECK PASSED: Trade meets configured limits."
+      ? "RISK CHECK PASSED."
       : "RISK VETO: Trade rejected.",
     riskPerUnit,
     proposedRisk,
     maxTradeRisk,
     dailyLoss,
     maxDailyLoss,
+    openRisk,
     openRiskAfterTrade: openRisk + proposedRisk,
     maxOpenRisk,
   };
