@@ -3,7 +3,7 @@
  * Atlas Trading Command Center
  * Simulation Engine — Phase 1
  *
- * Uses virtual accounts only.
+ * Virtual accounts only.
  * No broker connection or live order execution.
  */
 
@@ -30,16 +30,11 @@ export function createVirtualAccount(strategy) {
     balance: INITIAL_VIRTUAL_BALANCE,
     realizedPnL: 0,
 
-    // Daily tracking. Reset logic will be added separately.
     dailyStartingBalance: INITIAL_VIRTUAL_BALANCE,
     dailyRealizedPnL: 0,
 
-    // Tracks trades that are currently open.
-openPositions: [],
-
-// Temporary compatibility field.
-// We will replace this with calculated open risk.
-openRisk: 0,
+    openPositions: [],
+    openRisk: 0,
 
     riskRules: { ...DEFAULT_RISK_RULES },
     trades: [],
@@ -56,7 +51,10 @@ export function validateTrade(trade) {
     };
   }
 
-  if (typeof trade.market !== "string" || !trade.market.trim()) {
+  if (
+    typeof trade.market !== "string" ||
+    !trade.market.trim()
+  ) {
     errors.push("Market is required.");
   }
 
@@ -68,7 +66,12 @@ export function validateTrade(trade) {
     errors.push("Direction must be LONG or SHORT.");
   }
 
-  for (const field of ["entry", "stop", "target", "quantity"]) {
+  for (const field of [
+    "entry",
+    "stop",
+    "target",
+    "quantity",
+  ]) {
     if (
       typeof trade[field] !== "number" ||
       !Number.isFinite(trade[field]) ||
@@ -140,7 +143,8 @@ export function openSimulatedPosition(account, trade) {
   if (
     !account ||
     !Array.isArray(account.openPositions) ||
-    !Number.isFinite(account.balance)
+    !Number.isFinite(account.balance) ||
+    !Number.isFinite(account.realizedPnL)
   ) {
     return {
       opened: false,
@@ -160,7 +164,9 @@ export function openSimulatedPosition(account, trade) {
   if (trade.strategy !== account.strategy) {
     return {
       opened: false,
-      errors: ["Trade strategy does not match the virtual account."],
+      errors: [
+        "Trade strategy does not match the virtual account.",
+      ],
     };
   }
 
@@ -229,7 +235,9 @@ export function recordSimulatedTrade(account, trade, result) {
   if (trade.strategy !== account.strategy) {
     return {
       recorded: false,
-      errors: ["Trade strategy does not match the virtual account."],
+      errors: [
+        "Trade strategy does not match the virtual account.",
+      ],
     };
   }
 
@@ -248,13 +256,19 @@ export function recordSimulatedTrade(account, trade, result) {
     };
   }
 
-  // Risk check happens before the trade can be recorded.
+  const openRisk = Array.isArray(account.openPositions)
+    ? account.openPositions.reduce(
+        (total, position) => total + position.riskAmount,
+        0
+      )
+    : account.openRisk ?? 0;
+
   const riskCheck = assessTradeRisk({
     accountBalance: account.balance,
     dailyStartingBalance:
       account.dailyStartingBalance ?? account.startingBalance,
     dailyRealizedPnL: account.dailyRealizedPnL ?? 0,
-    openRisk: account.openRisk ?? 0,
+    openRisk,
     entry: trade.entry,
     stop: trade.stop,
     quantity: trade.quantity,
@@ -270,7 +284,8 @@ export function recordSimulatedTrade(account, trade, result) {
     };
   }
 
-  const directionMultiplier = trade.direction === "LONG" ? 1 : -1;
+  const directionMultiplier =
+    trade.direction === "LONG" ? 1 : -1;
 
   const grossPnL =
     (result.exitPrice - trade.entry) *
@@ -289,7 +304,6 @@ export function recordSimulatedTrade(account, trade, result) {
     recordedAt: new Date().toISOString(),
   };
 
-  // Update totals only after all validation and risk checks pass.
   account.balance += netPnL;
   account.realizedPnL += netPnL;
   account.dailyRealizedPnL =
@@ -309,9 +323,15 @@ export function getPerformanceSummary(account) {
   }
 
   const trades = account.trades;
-  const wins = trades.filter((trade) => trade.netPnL > 0).length;
-  const losses = trades.filter((trade) => trade.netPnL < 0).length;
-  const breakeven = trades.filter((trade) => trade.netPnL === 0).length;
+  const wins = trades.filter(
+    (trade) => trade.netPnL > 0
+  ).length;
+  const losses = trades.filter(
+    (trade) => trade.netPnL < 0
+  ).length;
+  const breakeven = trades.filter(
+    (trade) => trade.netPnL === 0
+  ).length;
 
   return {
     strategy: account.strategy,
@@ -323,6 +343,8 @@ export function getPerformanceSummary(account) {
     wins,
     losses,
     breakeven,
-    winRate: trades.length ? wins / trades.length : null,
+    winRate: trades.length
+      ? wins / trades.length
+      : null,
   };
 }
