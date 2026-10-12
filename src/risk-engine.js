@@ -15,7 +15,7 @@ export const DEFAULT_RISK_RULES = Object.freeze({
 
 export function assessTradeRisk({
   accountBalance,
-  dailyStartingBalance,
+  dailyStartingBalance = accountBalance,
   dailyRealizedPnL = 0,
   openRisk = 0,
   entry,
