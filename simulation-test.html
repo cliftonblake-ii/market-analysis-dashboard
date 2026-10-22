@@ -24,6 +24,7 @@
     li { margin-bottom: 10px; }
     .pass { color: #70dda0; }
     .fail { color: #ff8585; }
+    .section { color: #9fb3c8; font-weight: bold; list-style: none; margin-top: 16px; }
   </style>
 </head>
 <body>
@@ -34,116 +35,416 @@
   <ul id="results"></ul>
 </section>
 
-<script type="module">
-  import {
-    STRATEGIES,
-    createVirtualAccount,
-    validateTrade,
-    recordSimulatedTrade,
-    getPerformanceSummary
-  } from "./src/simulation.js";
+<script>
+  // Minimal test harness shared by the checks below. This is a classic
+  // (non-module) script so it still runs when an engine module fails to
+  // load or parse. It adds: per-rule assertion helpers, a global error /
+  // unhandled-rejection handler, and an overall 10 s timeout, so the page
+  // always ends with a clear summary instead of staying on "Running tests...".
+  (function () {
+    const TIMEOUT_MS = 10000;
+    const state = { passed: 0, failed: 0, errors: [], finished: false };
+    const $ = (id) => document.getElementById(id);
 
-  const results = document.getElementById("results");
-  const status = document.getElementById("status");
-  let passed = 0;
-  let failed = 0;
-
-  function test(name, check) {
-    const item = document.createElement("li");
-
-    try {
-      if (!check()) throw new Error("Check returned false.");
-      item.textContent = "PASS — " + name;
-      item.className = "pass";
-      passed++;
-    } catch (error) {
-      item.textContent = "FAIL — " + name + ": " + error.message;
-      item.className = "fail";
-      failed++;
+    function addItem(text, className) {
+      const item = document.createElement("li");
+      item.textContent = text;
+      item.className = className;
+      $("results").appendChild(item);
     }
 
-    results.appendChild(item);
+    function counts() {
+      return `${state.passed} passed; ${state.failed} failed.`;
+    }
+
+    function showStatus(prefix) {
+      const status = $("status");
+      status.textContent = prefix ? `${prefix} ${counts()}` : counts();
+      status.className =
+        state.failed === 0 && state.errors.length === 0 ? "pass" : "fail";
+    }
+
+    function reportError(kind, message) {
+      state.errors.push(message);
+      addItem(`ERROR — ${kind}: ${message}`, "fail");
+      showStatus(`${kind}: ${message} —`);
+    }
+
+    function test(name, check) {
+      try {
+        if (!check()) throw new Error("Check returned false.");
+        addItem("PASS — " + name, "pass");
+        state.passed++;
+      } catch (error) {
+        addItem("FAIL — " + name + ": " + error.message, "fail");
+        state.failed++;
+      }
+    }
+
+    function section(title) {
+      addItem(title, "section");
+    }
+
+    function errorsOf(result) {
+      return result && Array.isArray(result.errors) ? result.errors : [];
+    }
+
+    // Passes only if the result was rejected (result[flag] === false) AND
+    // exactly one error was reported AND it contains the given fragment.
+    // This proves the named rule fired and no other rule did.
+    function rejectedOnlyBy(result, flag, fragment) {
+      if (!result || result[flag] !== false) {
+        throw new Error(`expected ${flag} === false, got ${result && result[flag]}`);
+      }
+      const errors = errorsOf(result);
+      if (errors.length !== 1 || !errors[0].includes(fragment)) {
+        throw new Error(
+          `expected exactly one error containing "${fragment}", got ${JSON.stringify(errors)}`
+        );
+      }
+      return true;
+    }
+
+    // Passes only if the result was rejected with exactly this set of
+    // errors (any order). Used where the input cannot isolate one rule.
+    function rejectedWithExactly(result, flag, fragments) {
+      if (!result || result[flag] !== false) {
+        throw new Error(`expected ${flag} === false, got ${result && result[flag]}`);
+      }
+      const errors = errorsOf(result);
+      const ok =
+        errors.length === fragments.length &&
+        fragments.every((f) => errors.some((e) => e.includes(f)));
+      if (!ok) {
+        throw new Error(
+          `expected errors ${JSON.stringify(fragments)}, got ${JSON.stringify(errors)}`
+        );
+      }
+      return true;
+    }
+
+    // Passes only if result[flag] === true and no errors were reported.
+    function acceptedCleanly(result, flag) {
+      if (!result || result[flag] !== true) {
+        throw new Error(
+          `expected ${flag} === true, got ${result && result[flag]}; errors ${JSON.stringify(errorsOf(result))}`
+        );
+      }
+      if (errorsOf(result).length !== 0) {
+        throw new Error(`expected no errors, got ${JSON.stringify(errorsOf(result))}`);
+      }
+      return true;
+    }
+
+    function finish() {
+      state.finished = true;
+      showStatus(state.errors.length ? `ERROR (${state.errors.length}) —` : "");
+    }
+
+    function setupError(error) {
+      state.finished = true;
+      reportError("TEST SETUP ERROR", error && error.message ? error.message : String(error));
+    }
+
+    // Uncaught errors, plus resource load failures (capture phase sees
+    // <script>/<link> load errors, which do not bubble).
+    window.addEventListener("error", (event) => {
+      if (event.target && event.target !== window) {
+        const src = event.target.src || event.target.href || event.target.tagName;
+        reportError("RESOURCE LOAD ERROR", `failed to load ${src}`);
+        return;
+      }
+      const where = event.filename ? ` (${event.filename}:${event.lineno})` : "";
+      reportError("UNCAUGHT ERROR", `${event.message}${where}`);
+    }, true);
+
+    window.addEventListener("unhandledrejection", (event) => {
+      const reason = event.reason;
+      reportError(
+        "UNHANDLED PROMISE REJECTION",
+        reason && reason.message ? reason.message : String(reason)
+      );
+    });
+
+    setTimeout(() => {
+      if (!state.finished) {
+        state.finished = true;
+        reportError("TIMEOUT", `tests did not finish within ${TIMEOUT_MS / 1000} s`);
+      }
+    }, TIMEOUT_MS);
+
+    window.AtlasTest = {
+      test, section, finish, setupError,
+      rejectedOnlyBy, rejectedWithExactly, acceptedCleanly,
+    };
+  })();
+</script>
+
+<script type="module">
+  const {
+    test, section, finish, setupError,
+    rejectedOnlyBy, rejectedWithExactly, acceptedCleanly,
+  } = window.AtlasTest;
+
+  // Note: "validatedProbability" is a CLAIMED input that the Patient
+  // strategy gate checks. These tests only check the gate; nothing here
+  // calculates or validates a real win rate.
+  const PATIENT_ERROR =
+    "Patient strategy requires a claimed validated probability from 85% to 100%.";
+
+  async function runTests() {
+    try {
+      const {
+        STRATEGIES,
+        createVirtualAccount,
+        validateTrade,
+        openSimulatedPosition,
+        recordSimulatedTrade,
+        getPerformanceSummary,
+      } = await import("./src/simulation.js");
+
+      const patient = createVirtualAccount(STRATEGIES.PATIENT);
+      const aggressive = createVirtualAccount(STRATEGIES.AGGRESSIVE);
+
+      // On a $100 account: per trade 1% = 1, daily 3% = 3, open 2% = 2.
+      // validTrade risks |100 - 99.5| * 1 * 1 = 0.5.
+      const validTrade = {
+        market: "MNQ",
+        strategy: STRATEGIES.AGGRESSIVE,
+        direction: "LONG",
+        entry: 100,
+        stop: 99.5,
+        target: 101,
+        quantity: 1,
+        pointValue: 1,
+      };
+
+      section("Original foundation checks (same names; now assert the specific rule)");
+
+      test("Creates separate $100 virtual accounts", () =>
+        patient.balance === 100 &&
+        aggressive.balance === 100 &&
+        patient !== aggressive &&
+        patient.dailyStartingBalance === 100 &&
+        patient.dailyRealizedPnL === 0 &&
+        patient.openRisk === 0
+      );
+
+      test("Accepts a correctly structured long trade", () =>
+        acceptedCleanly(validateTrade(validTrade), "valid")
+      );
+
+      test("Rejects a long trade with a stop above entry", () =>
+        rejectedOnlyBy(
+          validateTrade({ ...validTrade, stop: 105 }),
+          "valid",
+          "A LONG stop must be below entry."
+        )
+      );
+
+      test("Rejects Patient strategy without validated probability", () =>
+        rejectedOnlyBy(
+          validateTrade({ ...validTrade, strategy: STRATEGIES.PATIENT }),
+          "valid",
+          PATIENT_ERROR
+        )
+      );
+
+      test("Rejects Patient strategy below the 85% threshold", () =>
+        rejectedOnlyBy(
+          validateTrade({
+            ...validTrade,
+            strategy: STRATEGIES.PATIENT,
+            validatedProbability: 0.84,
+          }),
+          "valid",
+          PATIENT_ERROR
+        )
+      );
+
+      const tradeResult = recordSimulatedTrade(
+        aggressive,
+        validTrade,
+        { exitPrice: 105, fees: 2 }
+      );
+
+      test("Records a simulated trade and subtracts fees", () =>
+        tradeResult.recorded === true &&
+        tradeResult.trade.grossPnL === 5 &&
+        tradeResult.trade.netPnL === 3 &&
+        Math.abs(aggressive.balance - 103) < 0.000001
+      );
+
+      test("Reports one winning trade", () => {
+        const summary = getPerformanceSummary(aggressive);
+        return summary.totalTrades === 1 &&
+          summary.wins === 1 &&
+          summary.losses === 0 &&
+          summary.realizedPnL === 3;
+      });
+
+      test("Rejects negative fees", () => {
+        const result = recordSimulatedTrade(
+          aggressive,
+          validTrade,
+          { exitPrice: 105, fees: -1 }
+        );
+        return rejectedOnlyBy(
+          result,
+          "recorded",
+          "A valid exit price and nonnegative fees are required."
+        ) &&
+          Math.abs(aggressive.balance - 103) < 0.000001 &&
+          aggressive.trades.length === 1;
+      });
+
+      section("Added: Patient claimed-probability gate boundary (input gate only, not a validated win rate)");
+
+      test("Accepts Patient strategy at exactly 0.85", () =>
+        acceptedCleanly(
+          validateTrade({
+            ...validTrade,
+            strategy: STRATEGIES.PATIENT,
+            validatedProbability: 0.85,
+          }),
+          "valid"
+        )
+      );
+
+      test("Rejects Patient strategy at 0.8499", () =>
+        rejectedOnlyBy(
+          validateTrade({
+            ...validTrade,
+            strategy: STRATEGIES.PATIENT,
+            validatedProbability: 0.8499,
+          }),
+          "valid",
+          PATIENT_ERROR
+        )
+      );
+
+      test("Accepts Patient strategy at exactly 1.0", () =>
+        acceptedCleanly(
+          validateTrade({
+            ...validTrade,
+            strategy: STRATEGIES.PATIENT,
+            validatedProbability: 1,
+          }),
+          "valid"
+        )
+      );
+
+      test("Rejects Patient strategy above 1.0 (1.01)", () =>
+        rejectedOnlyBy(
+          validateTrade({
+            ...validTrade,
+            strategy: STRATEGIES.PATIENT,
+            validatedProbability: 1.01,
+          }),
+          "valid",
+          PATIENT_ERROR
+        )
+      );
+
+      section("Added: entry equals stop");
+
+      // For a LONG trade, entry === stop also breaks "stop below entry",
+      // so the rule cannot be isolated; require exactly these two errors.
+      test("validateTrade rejects a trade whose entry equals its stop", () =>
+        rejectedWithExactly(
+          validateTrade({ ...validTrade, stop: 100 }),
+          "valid",
+          [
+            "Entry and stop cannot be the same price.",
+            "A LONG stop must be below entry.",
+          ]
+        )
+      );
+
+      section("Added: risk check inside recordSimulatedTrade");
+
+      // Risk |100 - 98| = 2 > 1 per trade; 2 <= 3 daily; 0 + 2 <= 2 open.
+      test("recordSimulatedTrade refuses a trade over the per-trade risk limit", () => {
+        const account = createVirtualAccount(STRATEGIES.AGGRESSIVE);
+        const result = recordSimulatedTrade(
+          account,
+          { ...validTrade, stop: 98, target: 105 },
+          { exitPrice: 105, fees: 0 }
+        );
+        return rejectedOnlyBy(result, "recorded", "Trade exceeds the maximum risk per trade.") &&
+          result.riskCheck.proposedRisk === 2 &&
+          account.balance === 100 &&
+          account.trades.length === 0;
+      });
+
+      section("Added: openSimulatedPosition");
+
+      test("openSimulatedPosition opens a valid trade and tracks its risk", () => {
+        const account = createVirtualAccount(STRATEGIES.AGGRESSIVE);
+        const result = openSimulatedPosition(account, validTrade);
+        return result.opened === true &&
+          result.riskCheck.approved === true &&
+          result.position.riskAmount === 0.5 &&
+          account.openPositions.length === 1 &&
+          account.openRisk === 0.5 &&
+          account.balance === 100 &&
+          account.trades.length === 0;
+      });
+
+      test("openSimulatedPosition rejects a trade for a different strategy", () => {
+        const account = createVirtualAccount(STRATEGIES.PATIENT);
+        return rejectedOnlyBy(
+          openSimulatedPosition(account, validTrade),
+          "opened",
+          "Trade strategy does not match the virtual account."
+        ) && account.openPositions.length === 0;
+      });
+
+      test("openSimulatedPosition rejects an invalid trade", () => {
+        const account = createVirtualAccount(STRATEGIES.AGGRESSIVE);
+        return rejectedOnlyBy(
+          openSimulatedPosition(account, { ...validTrade, stop: 105 }),
+          "opened",
+          "A LONG stop must be below entry."
+        ) && account.openPositions.length === 0;
+      });
+
+      test("openSimulatedPosition rejects a trade over the per-trade risk limit", () => {
+        const account = createVirtualAccount(STRATEGIES.AGGRESSIVE);
+        return rejectedOnlyBy(
+          openSimulatedPosition(account, { ...validTrade, stop: 98 }),
+          "opened",
+          "Trade exceeds the maximum risk per trade."
+        ) && account.openPositions.length === 0 && account.openRisk === 0;
+      });
+
+      // Four positions of 0.5 reach the 2.0 open-risk limit; a fifth
+      // (2.0 + 0.5 > 2.0) must be refused by the combined open-risk rule.
+      test("openSimulatedPosition enforces combined open risk across positions", () => {
+        const account = createVirtualAccount(STRATEGIES.AGGRESSIVE);
+        for (let i = 1; i <= 4; i++) {
+          const r = openSimulatedPosition(account, validTrade);
+          if (r.opened !== true) {
+            throw new Error(`position ${i} should open; errors ${JSON.stringify(r.errors)}`);
+          }
+        }
+        if (account.openRisk !== 2) {
+          throw new Error(`expected openRisk 2 after four positions, got ${account.openRisk}`);
+        }
+        return rejectedOnlyBy(
+          openSimulatedPosition(account, validTrade),
+          "opened",
+          "Trade would exceed the maximum combined open risk."
+        ) && account.openPositions.length === 4 && account.openRisk === 2;
+      });
+
+      finish();
+    } catch (error) {
+      setupError(error);
+    }
   }
 
-  const patient = createVirtualAccount(STRATEGIES.PATIENT);
-  const aggressive = createVirtualAccount(STRATEGIES.AGGRESSIVE);
-
-  test("Creates separate $100 virtual accounts", () =>
-  patient.balance === 100 &&
-  aggressive.balance === 100 &&
-  patient !== aggressive &&
-  patient.dailyStartingBalance === 100 &&
-  patient.dailyRealizedPnL === 0 &&
-  patient.openRisk === 0
-);
-
-  
-const validTrade = {
-  market: "MNQ",
-  strategy: STRATEGIES.AGGRESSIVE,
-  direction: "LONG",
-  entry: 100,
-  stop: 99.5,
-  target: 101,
-  quantity: 1,
-  pointValue: 1
-};
-
-
-  test("Accepts a correctly structured long trade", () =>
-    validateTrade(validTrade).valid
-  );
-
-  test("Rejects a long trade with a stop above entry", () =>
-    !validateTrade({ ...validTrade, stop: 105 }).valid
-  );
-
-  test("Rejects Patient strategy without validated probability", () =>
-    !validateTrade({
-      ...validTrade,
-      strategy: STRATEGIES.PATIENT
-    }).valid
-  );
-
-  test("Rejects Patient strategy below the 85% threshold", () =>
-    !validateTrade({
-      ...validTrade,
-      strategy: STRATEGIES.PATIENT,
-      validatedProbability: 0.84
-    }).valid
-  );
-
-  const tradeResult = recordSimulatedTrade(
-    aggressive,
-    validTrade,
-    { exitPrice: 105, fees: 2 }
-  );
-
-  test("Records a simulated trade and subtracts fees", () =>
-    tradeResult.recorded &&
-    Math.abs(aggressive.balance - 103) < 0.000001
-  );
-
-  test("Reports one winning trade", () => {
-    const summary = getPerformanceSummary(aggressive);
-    return summary.totalTrades === 1 &&
-      summary.wins === 1 &&
-      summary.realizedPnL === 3;
-  });
-
-  test("Rejects negative fees", () => {
-    const result = recordSimulatedTrade(
-      aggressive,
-      validTrade,
-      { exitPrice: 105, fees: -1 }
-    );
-    return !result.recorded;
-  });
-
-  status.textContent =
-    `${passed} passed; ${failed} failed.`;
-
-  status.className = failed === 0 ? "pass" : "fail";
+  runTests();
 </script>
 </body>
 </html>
