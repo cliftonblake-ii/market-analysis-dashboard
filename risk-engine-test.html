@@ -24,6 +24,7 @@
     li { margin-bottom: 10px; }
     .pass { color: #70dda0; }
     .fail { color: #ff8585; }
+    .section { color: #9fb3c8; font-weight: bold; list-style: none; margin-top: 16px; }
   </style>
 </head>
 <body>
@@ -34,28 +35,165 @@
   <ul id="results"></ul>
 </section>
 
-<script type="module">
-  const status = document.getElementById("status");
-  const results = document.getElementById("results");
+<script>
+  // Minimal test harness shared by the checks below. This is a classic
+  // (non-module) script so it still runs when an engine module fails to
+  // load or parse. It adds: per-rule assertion helpers, a global error /
+  // unhandled-rejection handler, and an overall 10 s timeout, so the page
+  // always ends with a clear summary instead of staying on "Running tests...".
+  (function () {
+    const TIMEOUT_MS = 10000;
+    const state = { passed: 0, failed: 0, errors: [], finished: false };
+    const $ = (id) => document.getElementById(id);
 
-  function test(name, check) {
-    const item = document.createElement("li");
-    try {
-      if (!check()) throw new Error("Check returned false.");
-      item.textContent = "PASS — " + name;
-      item.className = "pass";
-    } catch (error) {
-      item.textContent = "FAIL — " + name + ": " + error.message;
-      item.className = "fail";
+    function addItem(text, className) {
+      const item = document.createElement("li");
+      item.textContent = text;
+      item.className = className;
+      $("results").appendChild(item);
     }
-    results.appendChild(item);
-  }
+
+    function counts() {
+      return `${state.passed} passed; ${state.failed} failed.`;
+    }
+
+    function showStatus(prefix) {
+      const status = $("status");
+      status.textContent = prefix ? `${prefix} ${counts()}` : counts();
+      status.className =
+        state.failed === 0 && state.errors.length === 0 ? "pass" : "fail";
+    }
+
+    function reportError(kind, message) {
+      state.errors.push(message);
+      addItem(`ERROR — ${kind}: ${message}`, "fail");
+      showStatus(`${kind}: ${message} —`);
+    }
+
+    function test(name, check) {
+      try {
+        if (!check()) throw new Error("Check returned false.");
+        addItem("PASS — " + name, "pass");
+        state.passed++;
+      } catch (error) {
+        addItem("FAIL — " + name + ": " + error.message, "fail");
+        state.failed++;
+      }
+    }
+
+    function section(title) {
+      addItem(title, "section");
+    }
+
+    function errorsOf(result) {
+      return result && Array.isArray(result.errors) ? result.errors : [];
+    }
+
+    // Passes only if the result was rejected (result[flag] === false) AND
+    // exactly one error was reported AND it contains the given fragment.
+    // This proves the named rule fired and no other rule did.
+    function rejectedOnlyBy(result, flag, fragment) {
+      if (!result || result[flag] !== false) {
+        throw new Error(`expected ${flag} === false, got ${result && result[flag]}`);
+      }
+      const errors = errorsOf(result);
+      if (errors.length !== 1 || !errors[0].includes(fragment)) {
+        throw new Error(
+          `expected exactly one error containing "${fragment}", got ${JSON.stringify(errors)}`
+        );
+      }
+      return true;
+    }
+
+    // Passes only if the result was rejected with exactly this set of
+    // errors (any order). Used where the input cannot isolate one rule.
+    function rejectedWithExactly(result, flag, fragments) {
+      if (!result || result[flag] !== false) {
+        throw new Error(`expected ${flag} === false, got ${result && result[flag]}`);
+      }
+      const errors = errorsOf(result);
+      const ok =
+        errors.length === fragments.length &&
+        fragments.every((f) => errors.some((e) => e.includes(f)));
+      if (!ok) {
+        throw new Error(
+          `expected errors ${JSON.stringify(fragments)}, got ${JSON.stringify(errors)}`
+        );
+      }
+      return true;
+    }
+
+    // Passes only if result[flag] === true and no errors were reported.
+    function acceptedCleanly(result, flag) {
+      if (!result || result[flag] !== true) {
+        throw new Error(
+          `expected ${flag} === true, got ${result && result[flag]}; errors ${JSON.stringify(errorsOf(result))}`
+        );
+      }
+      if (errorsOf(result).length !== 0) {
+        throw new Error(`expected no errors, got ${JSON.stringify(errorsOf(result))}`);
+      }
+      return true;
+    }
+
+    function finish() {
+      state.finished = true;
+      showStatus(state.errors.length ? `ERROR (${state.errors.length}) —` : "");
+    }
+
+    function setupError(error) {
+      state.finished = true;
+      reportError("TEST SETUP ERROR", error && error.message ? error.message : String(error));
+    }
+
+    // Uncaught errors, plus resource load failures (capture phase sees
+    // <script>/<link> load errors, which do not bubble).
+    window.addEventListener("error", (event) => {
+      if (event.target && event.target !== window) {
+        const src = event.target.src || event.target.href || event.target.tagName;
+        reportError("RESOURCE LOAD ERROR", `failed to load ${src}`);
+        return;
+      }
+      const where = event.filename ? ` (${event.filename}:${event.lineno})` : "";
+      reportError("UNCAUGHT ERROR", `${event.message}${where}`);
+    }, true);
+
+    window.addEventListener("unhandledrejection", (event) => {
+      const reason = event.reason;
+      reportError(
+        "UNHANDLED PROMISE REJECTION",
+        reason && reason.message ? reason.message : String(reason)
+      );
+    });
+
+    setTimeout(() => {
+      if (!state.finished) {
+        state.finished = true;
+        reportError("TIMEOUT", `tests did not finish within ${TIMEOUT_MS / 1000} s`);
+      }
+    }, TIMEOUT_MS);
+
+    window.AtlasTest = {
+      test, section, finish, setupError,
+      rejectedOnlyBy, rejectedWithExactly, acceptedCleanly,
+    };
+  })();
+</script>
+
+<script type="module">
+  const {
+    test, section, finish, setupError,
+    rejectedOnlyBy, acceptedCleanly,
+  } = window.AtlasTest;
 
   async function runTests() {
     try {
       const { assessTradeRisk } =
         await import("./src/risk-engine.js");
 
+      // Limits for this account with DEFAULT_RISK_RULES:
+      // per trade 1% = 10, daily loss 3% = 30, combined open risk 2% = 20.
+      // baseTrade risks |100 - 95| * 1 * 1 = 5.
       const baseTrade = {
         accountBalance: 1000,
         entry: 100,
@@ -64,62 +202,119 @@
         pointValue: 1,
       };
 
-      test("Approves a trade within all limits", () =>
-        assessTradeRisk(baseTrade).approved
-      );
+      section("Original risk checks (same names; now assert the specific rule)");
 
-      test("Rejects a trade risking too much per trade", () =>
-        !assessTradeRisk({
-          ...baseTrade,
-          quantity: 3,
-        }).approved
-      );
-
-      test("Rejects a trade when the daily loss limit is reached", () =>
-        !assessTradeRisk({
-          ...baseTrade,
-          dailyRealizedPnL: -30,
-        }).approved
-      );
-
-      test("Rejects a trade that exceeds combined open risk", () =>
-        !assessTradeRisk({
-          ...baseTrade,
-          openRisk: 20,
-        }).approved
-      );
-
-      test("Rejects a zero entry price", () =>
-        !assessTradeRisk({
-          ...baseTrade,
-          entry: 0,
-        }).approved
-      );
-
-      test("Rejects a negative quantity", () =>
-        !assessTradeRisk({
-          ...baseTrade,
-          quantity: -1,
-        }).approved
-      );
-
-      test("Calculates proposed risk correctly", () => {
+      test("Approves a trade within all limits", () => {
         const result = assessTradeRisk(baseTrade);
-        return result.approved &&
-          result.proposedRisk === 5;
+        return acceptedCleanly(result, "approved") &&
+          result.message === "RISK CHECK PASSED.";
       });
 
-      const items = [...results.children];
-      const failed = items.filter(
-        item => item.className === "fail"
-      ).length;
-      const passed = items.length - failed;
+      // Risk 15 > 10 per trade; 15 <= 30 daily; 15 <= 20 open.
+      test("Rejects a trade risking too much per trade", () =>
+        rejectedOnlyBy(
+          assessTradeRisk({ ...baseTrade, quantity: 3 }),
+          "approved",
+          "Trade exceeds the maximum risk per trade."
+        )
+      );
 
-      status.textContent = `${passed} passed; ${failed} failed.`;
-      status.className = failed === 0 ? "pass" : "fail";
+      // Daily loss 30 >= 30: only the "limit reached" branch may fire,
+      // not the "could exceed" branch.
+      test("Rejects a trade when the daily loss limit is reached", () =>
+        rejectedOnlyBy(
+          assessTradeRisk({ ...baseTrade, dailyRealizedPnL: -30 }),
+          "approved",
+          "Daily loss limit reached. No new trades allowed."
+        )
+      );
+
+      // Open 20 + 5 > 20; per-trade and daily limits not hit.
+      test("Rejects a trade that exceeds combined open risk", () =>
+        rejectedOnlyBy(
+          assessTradeRisk({ ...baseTrade, openRisk: 20 }),
+          "approved",
+          "Trade would exceed the maximum combined open risk."
+        )
+      );
+
+      // Stop 0.5 keeps |entry - stop| tiny, so if the entry check were
+      // missing no other rule would reject this trade.
+      test("Rejects a zero entry price", () => {
+        const result = assessTradeRisk({ ...baseTrade, entry: 0, stop: 0.5 });
+        return rejectedOnlyBy(result, "approved", "entry must be a positive number.") &&
+          result.message === "RISK VETO: Invalid inputs.";
+      });
+
+      // If the quantity check were missing, risk would be -5 and nothing
+      // else would reject the trade.
+      test("Rejects a negative quantity", () => {
+        const result = assessTradeRisk({ ...baseTrade, quantity: -1 });
+        return rejectedOnlyBy(result, "approved", "quantity must be a positive number.") &&
+          result.message === "RISK VETO: Invalid inputs.";
+      });
+
+      // pointValue 5 and quantity 2 (not 1) so dropping either factor
+      // from riskPerUnit = |entry - stop| * pointValue,
+      // proposedRisk = riskPerUnit * quantity is detected.
+      test("Calculates proposed risk correctly", () => {
+        const long = assessTradeRisk({
+          ...baseTrade, entry: 100, stop: 99.5, quantity: 2, pointValue: 5,
+        });
+        const short = assessTradeRisk({
+          ...baseTrade, entry: 100, stop: 100.5, quantity: 2, pointValue: 5,
+        });
+        for (const [label, r] of [["long", long], ["short", short]]) {
+          acceptedCleanly(r, "approved");
+          if (r.riskPerUnit !== 2.5 || r.proposedRisk !== 5 || r.openRiskAfterTrade !== 5) {
+            throw new Error(
+              `${label}: expected riskPerUnit 2.5, proposedRisk 5, openRiskAfterTrade 5; got ` +
+              `${r.riskPerUnit}, ${r.proposedRisk}, ${r.openRiskAfterTrade}`
+            );
+          }
+        }
+        return true;
+      });
+
+      section("Added rule-specific risk checks");
+
+      test("Rejects a trade whose entry equals its stop", () =>
+        rejectedOnlyBy(
+          assessTradeRisk({ ...baseTrade, entry: 100, stop: 100 }),
+          "approved",
+          "Entry and stop cannot be the same price."
+        )
+      );
+
+      // Daily loss 27 < 30, but 27 + 5 > 30.
+      test("Rejects a trade that could exceed the daily loss limit", () =>
+        rejectedOnlyBy(
+          assessTradeRisk({ ...baseTrade, dailyRealizedPnL: -27 }),
+          "approved",
+          "Trade could exceed the daily loss limit."
+        )
+      );
+
+      // Each limit is "greater than", so exactly-at-limit is allowed.
+      test("Approves trades exactly at the per-trade, daily and open-risk limits", () => {
+        const cases = {
+          "per-trade 10 = 10": { ...baseTrade, quantity: 2 },
+          "daily 25 + 5 = 30": { ...baseTrade, dailyRealizedPnL: -25 },
+          "open 15 + 5 = 20": { ...baseTrade, openRisk: 15 },
+        };
+        for (const [label, input] of Object.entries(cases)) {
+          try {
+            acceptedCleanly(assessTradeRisk(input), "approved");
+          } catch (error) {
+            throw new Error(`${label}: ${error.message}`);
+          }
+        }
+        return true;
+      });
+
+      finish();
     } catch (error) {
-      status.textContent = "TEST SETUP ERROR: " + error.message;
-      status.className = "fail";
+      setupError(error);
     }
   }
 
